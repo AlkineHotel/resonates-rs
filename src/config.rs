@@ -89,7 +89,14 @@ impl Default for Config {
                 force: false,
             },
             files: FilesConfig {
-                file_types: vec!["rs".to_string(), "js".to_string(), "jsx".to_string(), "ts".to_string(), "tsx".to_string()],
+                file_types: vec![
+                    "rs".to_string(), "js".to_string(), "jsx".to_string(), "ts".to_string(), "tsx".to_string(),
+                    "py".to_string(), "go".to_string(), "java".to_string(), "c".to_string(), "cpp".to_string(),
+                    "cc".to_string(), "cxx".to_string(), "cs".to_string(), "sh".to_string(), "bash".to_string(),
+                    "ps1".to_string(), "html".to_string(), "css".to_string(), "json".to_string(), "yml".to_string(),
+                    "yaml".to_string(), "toml".to_string(), "xml".to_string(), "sql".to_string(),
+                    "dockerfile".to_string(), "md".to_string()
+                ],
                 exclude: vec![
                     "node_modules".to_string(),
                     "target".to_string(),

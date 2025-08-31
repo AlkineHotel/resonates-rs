@@ -1,0 +1,11 @@
+target/**/deps
+target/**/.fingerprint
+target/**/build
+target/**/incremental
+_analysisjsons*
+*.exe
+*.pdb
+target/debug/resonates.d
+target/debug/xzCodeAnalyzer.d
+*.lock
+target/debug/.cargo-lock

@@ -1,0 +1,733 @@
+use clap::{Parser, ValueEnum, Command};
+use clap_complete::{generate, Generator, Shell};
+use code_splitter::{CharCounter, Splitter};
+use serde::Serialize;
+use anyhow::{Result, Context};
+use std::{fs};
+use std::path::Path;
+use std::string::String;
+use walkdir::WalkDir;
+use std::option::Option::Some;
+use indicatif::{ProgressBar, ProgressStyle, ProgressState, ProgressFinish};
+mod similarity;
+mod embedder_fast;
+mod ann_hnsw;
+mod graph;
+mod api;
+mod cluster;
+mod config;
+
+use similarity::{RawChunk, SimilarityMode, SimilarityParams, SimilarityReport};
+
+use embedder_fast::{FastEmbedder, resolve_model};
+
+// define is_some() for std::string::String
+
+
+#[derive(Parser, Debug)]
+#[command(name = "resonates")]
+#[command(version = "1.3")]
+#[command(about = "Semantic Code Pattern Analysis via Embedding Resonance")]
+struct Args {
+    /// Path to analyze
+    #[arg(short, long, default_value = "./")]
+    path: String,
+
+    /// Maximum chunk size (characters)
+    #[arg(long, default_value_t = 2048)]
+    max_size: usize,
+
+    /// Output FOLDER for chunk analysis results
+    #[arg(short, long, default_value = "./_analysisjsons/")]
+    folder: String,
+
+    /// Output file for chunk analysis results
+    #[arg(short, long, default_value = "/analysis.json")]
+    output: String,
+
+    /// Language to analyze
+    #[arg(short, long, value_enum, default_value_t = Language::Auto)]
+    language: Language,
+
+    /// Output mode for chunk analysis
+    #[arg(long, value_enum, default_value_t = OutputMode::Json)]
+    mode: OutputMode,
+
+    /// File extensions to analyze (comma-separated)
+    #[arg(long, default_value = "rs,js,jsx,ts,tsx")]
+    file_types: String,
+
+    /// Verbosity level
+    #[arg(short, long, value_enum, default_value_t = Verbosity::Normal)]
+    verbose: Verbosity,
+
+    /// Recursive analysis
+    #[arg(short, long, default_value_t = false)]
+    recursive: bool,
+
+    /// Maximum file size to analyze (bytes) - set to 0 to disable
+    #[arg(long, default_value_t = 100_000_000)]
+    max_file_size: usize,
+
+    /// Skip files with more than this many lines - set to 0 to disable
+    #[arg(long, default_value_t = 0)]
+    max_lines: usize,
+
+    /// Force processing of large files (ignores safety limits)
+    #[arg(long, default_value_t = false)]
+    force: bool,
+
+    /// Exclude patterns (comma-separated, supports wildcards)
+    #[arg(long, default_value = "node_modules,target,dist,build,.git,*.lock,package-lock.json")]
+    exclude: String,
+
+    /// Maximum number of files to process (safety limit)
+    #[arg(long, default_value_t = 20000)]
+    max_files: usize,
+
+    // -------- Similarity options --------
+
+    /// Similarity mode: none (disable), token (SimHash+Jaccard), embedding (fastembed/external)
+    #[arg(long, value_enum, default_value_t = SimMode::Token)]
+    similarity: SimMode,
+
+    /// Similarity threshold (Jaccard for token, cosine for embedding)
+    #[arg(long, default_value_t = 0.86)]
+    sim_threshold: f32,
+
+    /// Top-k pairs to keep in the similarity report (0 = keep all)
+    #[arg(long, default_value_t = 300)]
+    sim_top_k: usize,
+
+    /// Band size in bits for SimHash candidate bucketing
+    #[arg(long, default_value_t = 8)]
+    sim_band_bits: usize,
+
+    /// Minimum tokens required in a chunk to be considered for similarity
+    #[arg(long, default_value_t = 6)]
+    sim_min_tokens: usize,
+
+    /// Only report cross-file similarities
+    #[arg(long, default_value_t = true)]
+    sim_cross_file_only: bool,
+
+    /// Write similarity report to this file (JSON)
+    #[arg(long, default_value = "similarity.json")]
+    sim_output: String,
+
+    /// Include code snippets in similarity report (and in stdout if --sim-print is set)
+    #[arg(long, default_value_t = false)]
+    sim_include_snippets: bool, 
+
+    /// Embedding command: "fastembed:<model>" or external process command
+    #[arg(long, default_value = "fastembed:jina-embeddings-v2-base-code")]
+    embedder_cmd: String,
+
+    /// Process chunks in batches of this size to reduce memory usage
+    #[arg(long, default_value_t = 5000)]
+    chunk_batch_size: usize,
+
+    /// ANN neighbors (embedding mode)
+    #[arg(long, default_value_t = 15)]
+    ann_k: usize,
+
+    /// ANN ef construction (embedding mode)
+    #[arg(long, default_value_t = 200)]
+    ann_ef: usize,
+
+    #[arg(long, default_value_t = 96)]
+    ann_ef_search: usize,
+
+    /// ANN m (embedding mode)
+    #[arg(long, default_value_t = 16)]
+    ann_m: usize,
+
+    /// Minimum token Jaccard to accept an embedding match (two-stage verify)
+    #[arg(long, default_value_t = 0.20)]
+    verify_min_jaccard: f32,
+
+    /// Print similarity pairs to stdout
+    #[arg(long, default_value_t = false)]
+    sim_print: bool,
+
+    /// Limit number of similarity pairs to print (0 = all)
+    #[arg(long, default_value_t = 10)]
+    sim_print_limit: usize,
+
+    // -------- Graph/API options --------
+
+    /// Build import dependency graph and write to this file (empty to skip)
+    #[arg(long, default_value = "/graph.json")]
+    graph_output: String,
+
+    /// Extract backend routes to this file (empty to skip)
+    #[arg(long, default_value = "/api_backend.json")]
+    api_backend_output: String,
+
+    /// Extract frontend calls to this file (empty to skip)
+    #[arg(long, default_value = "/api_frontend.json")]
+    api_frontend_output: String,
+
+    /// Map FE<->BE calls to this file (empty to skip)
+    #[arg(long, default_value = "/api_map.json")]
+    api_map_output: String,
+
+    /// Suspects (clusters + misplaced) output file
+    #[arg(long, default_value = "/suspects.json")]
+    suspects_output: String,
+
+    /// Generate shell completion scripts
+    #[arg(long, value_enum)]
+    generate_completion: Option<Shell>,
+
+    /// Generate default config file and exit
+    #[arg(long)]
+    generate_config: bool,
+
+    /// Path to config file (overrides default locations)
+    #[arg(long)]
+    config: Option<String>,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum Language {
+    Auto,
+    Rust,
+    JavaScript,
+    TypeScript,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum OutputMode {
+    Json,
+    Simple,
+    Verbose,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+}
+
+#[derive(Clone, Debug, ValueEnum,PartialEq)]
+enum SimMode {
+    None,
+    Token,
+    Embedding,
+}
+
+fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
+    generate(gen, cmd, cmd.get_name().to_string(), &mut std::io::stdout());
+}
+
+fn build_cli() -> Command {
+    use clap::CommandFactory;
+    Args::command()
+}
+fn main() -> Result<()> {
+    // Increase stack size for massive files
+    let builder = std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(32 * 1024 * 1024); // 32MB
+
+    let handler = builder.spawn(|| actual_main()).expect("Failed to spawn main thread");
+    handler.join().expect("Main thread panicked")
+}
+
+fn actual_main() -> Result<()> {
+    let args = Args::parse();
+
+    // Handle shell completion generation
+    if let Some(generator) = args.generate_completion {
+        let mut cmd = build_cli();
+        eprintln!("Generating completion file for {generator}...");
+        print_completions(generator, &mut cmd);
+        return Ok(());
+    }
+
+    // Handle config generation
+    if args.generate_config {
+        match config::Config::save_default() {
+            Ok(path) => {
+                println!("Generated default config file at: {}", path.display());
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Failed to generate config file: {}", e);
+                return Err(e);
+            }
+        }
+    }
+
+    let file_types: Vec<&str> = args.file_types.split(',').collect();
+    let folder = Path::new(&args.folder);
+    if !folder.exists() {
+        fs::create_dir_all(folder)?;
+    }
+
+
+    if !matches!(args.verbose, Verbosity::Quiet) {
+        println!("🔍 Path: {}", args.path);
+        println!("🌐 Language: {:?}", args.language);
+        println!("🧪 Similarity: {:?} (threshold {:.2})", args.similarity, args.sim_threshold);
+        if args.similarity == SimMode::Embedding && !args.embedder_cmd.trim().is_empty() {
+            println!("🧠 Embedder: {}", args.embedder_cmd);
+            println!("🏗️  ANN: k={}, ef={}, m={}", args.ann_k, args.ann_ef, args.ann_m);
+        }
+    }
+
+    let mut analysis_results = Vec::new();
+    let mut total_files = 0;
+    let mut total_chunks = 0;
+    let mut last_length = 0;
+    let mut skipped_files = 0;
+    let mut failed_files = 0;
+
+    let walker = if args.recursive {
+        WalkDir::new(&args.path).follow_links(false)
+    } else {
+        WalkDir::new(&args.path).max_depth(1).follow_links(false)
+    };
+
+    let exclude_patterns: Vec<&str> = args.exclude.split(',').map(|s| s.trim()).collect();
+    let mut processed_files = 0;
+
+    // Collect raw chunks for similarity
+    let need_similarity_text = !matches!(args.similarity, SimMode::None);
+    let mut raw_chunks: Vec<RawChunk> = Vec::new();
+    let mut next_chunk_id: usize = 0;
+
+    // Collect file blobs for graph/API
+    let need_files = !args.graph_output.is_empty() || !args.api_backend_output.is_empty() || !args.api_frontend_output.is_empty();
+    let mut blobs_graph: Vec<graph::FileBlob> = Vec::new();
+    let mut blobs_api: Vec<api::FileBlob> = Vec::new();
+
+    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let path_str = path.to_string_lossy();
+        // Exclude patterns
+        let should_exclude = exclude_patterns.iter().any(|pattern| {
+            if pattern.contains('*') {
+                let pattern = pattern.replace('*', "");
+                path_str.contains(&pattern)
+            } else {
+                path_str.contains(*pattern)
+            }
+        });
+        if should_exclude {
+            continue;
+        }
+
+        // File count safety
+        if !args.force && processed_files >= args.max_files {
+            if !matches!(args.verbose, Verbosity::Quiet) {
+                println!("⚠️  Hit file limit of {}. Use --force or --max-files to override", args.max_files);
+            }
+            break;
+        }
+        processed_files += 1;
+
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        if !file_types.contains(&extension) {
+            continue;
+        }
+
+        // Size checks
+        let metadata = match path.metadata() {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if !args.force && args.max_file_size > 0 && metadata.len() > args.max_file_size as u64 {
+            skipped_files += 1;
+            if !matches!(args.verbose, Verbosity::Quiet) {
+                println!("⚠️  Skipping large file: {} ({} bytes)", path.display(), metadata.len());
+            }
+            continue;
+        }
+
+        total_files += 1;
+        if matches!(args.verbose, Verbosity::Verbose) {
+            println!("📄 Analyzing: {}", path.display());
+        }
+
+        let effective_max_lines = if args.force { 0 } else { args.max_lines };
+        match analyze_file(path, args.max_size, &args.language, effective_max_lines, &args, need_similarity_text, need_files) {
+            Ok((file_analysis, maybe_raw, maybe_blob_text)) => {
+                last_length = file_analysis.chunks.len();
+                total_chunks += file_analysis.chunks.len();
+
+                match args.mode {
+                    OutputMode::Simple => {
+                        for (i, chunk) in file_analysis.chunks.iter().enumerate() {
+                            println!(
+                                "Chunk {}: {} (lines {}-{}, {} chars)",
+                                i + 1,
+                                chunk.subtree_description,
+                                chunk.start_line,
+                                chunk.end_line,
+                                chunk.size
+                            );
+                        }
+                    }
+                    OutputMode::Verbose => {
+                        println!("File: {}", file_analysis.file_path);
+                        for (i, chunk) in file_analysis.chunks.iter().enumerate() {
+                            println!("  Chunk {}: {}", i + 1, chunk.subtree_description);
+                            println!("    Lines: {}-{}", chunk.start_line, chunk.end_line);
+                            println!("    Bytes: {}-{}", chunk.start_byte, chunk.end_byte);
+                            println!("    Size: {} chars", chunk.size);
+                            println!();
+                        }
+                    }
+                    OutputMode::Json => {
+                        analysis_results.push(file_analysis);
+                    }
+                }
+                if let Some(mut rc) = maybe_raw {
+                    for r in rc.iter_mut() {
+                        r.id = next_chunk_id;
+                        next_chunk_id += 1;
+                    }
+                    raw_chunks.extend(rc);
+                }
+                if let Some(text) = maybe_blob_text {
+                    if !args.graph_output.is_empty() {
+                        blobs_graph.push(graph::FileBlob {
+                            path: path.to_string_lossy().to_string(),
+                            text: text.clone(),
+                        });
+                    }
+                    if !args.api_backend_output.is_empty() || !args.api_frontend_output.is_empty() || !args.api_map_output.is_empty() {
+                        blobs_api.push(api::FileBlob {
+                            path: path.to_string_lossy().to_string(),
+                            text,
+                        });
+                    }
+                }
+                if !matches!(args.verbose, Verbosity::Quiet) {
+                    println!("   ✅ {} chunks", last_length);
+                }
+            }
+            Err(e) => {
+                failed_files += 1;
+                if !matches!(args.verbose, Verbosity::Quiet) {
+                    println!("   ❌ Error: {}", e);
+                }
+            }
+        }
+    }
+
+    if matches!(args.mode, OutputMode::Json) {
+        let summary = AnalysisSummary {
+            last_length,
+            total_files,
+            total_chunks,
+            max_chunk_size: args.max_size,
+            files: analysis_results,
+        };
+        let json_output = serde_json::to_string_pretty(&summary)?;
+        let output_path = folder.join(args.output.strip_prefix("/").unwrap_or(&args.output));
+        fs::write(&output_path, json_output)?;
+        if !matches!(args.verbose, Verbosity::Quiet) {
+            println!("💾 analysis -> {}", output_path.display());
+        }
+    }
+
+    // Similarity pass
+    let mut sim_report: Option<SimilarityReport> = None;
+    if !matches!(args.similarity, SimMode::None) {
+        if !matches!(args.verbose, Verbosity::Quiet) {
+            println!("🔎 Similarity detection ({:?}) ...", args.similarity);
+        }
+
+        let sim_mode = match args.similarity {
+            SimMode::None => SimilarityMode::None,
+            SimMode::Token => SimilarityMode::Token,
+            SimMode::Embedding => SimilarityMode::Embedding,
+        };
+
+        let params = SimilarityParams {
+            mode: sim_mode,
+            threshold: args.sim_threshold,
+            top_k: args.sim_top_k,
+            band_bits: args.sim_band_bits,
+            min_tokens: args.sim_min_tokens,
+            include_snippets: args.sim_include_snippets,
+            cross_file_only: args.sim_cross_file_only,
+            embedder_cmd: if args.embedder_cmd.trim().is_empty() { None } else { Some(args.embedder_cmd.as_str()) },
+            ann_k: args.ann_k,
+            ann_ef: args.ann_ef,               // ef_construction
+            ann_m: args.ann_m.max(32),         // default 32 recommended
+            ann_ef_search: args.ann_ef_search, // ef during query
+            verify_min_jaccard: args.verify_min_jaccard,
+        };
+
+        let report = similarity::run_similarity(raw_chunks, params)?;
+        let json_output = serde_json::to_string_pretty(&report)?;
+        let sim_output_path = folder.join(&args.sim_output);
+        fs::write(&sim_output_path, json_output)?;
+        if !matches!(args.verbose, Verbosity::Quiet) {
+            println!("💾 similarity -> {}", sim_output_path.display());
+            println!("📈 pairs: {}", report.total_pairs);
+        }
+
+        if args.sim_print {
+            print_pairs(&report, args.sim_include_snippets, args.sim_print_limit);
+        }
+
+        sim_report = Some(report);
+    }
+
+    // Clusters + misplaced suspects
+    if let Some(report) = &sim_report {
+        let suspects = cluster::clusters_and_suspects(&report.pairs);
+        let out = serde_json::to_string_pretty(&suspects)?;
+        let suspects_output_path = folder.join(args.suspects_output.strip_prefix("/").unwrap_or(&args.suspects_output));
+        fs::write(&suspects_output_path, out)?;
+        if !matches!(args.verbose, Verbosity::Quiet) {
+            println!("💾 suspects -> {}", suspects_output_path.display());
+        }
+    }
+
+    // Graph
+    if !args.graph_output.is_empty() {
+        let gr = graph::build_graph(&blobs_graph);
+        let out = serde_json::to_string_pretty(&gr)?;
+        let graph_output_path = folder.join(args.graph_output.strip_prefix("/").unwrap_or(&args.graph_output));
+        fs::write(&graph_output_path, out)?;
+        if !matches!(args.verbose, Verbosity::Quiet) {
+            println!("💾 graph -> {}", graph_output_path.display());
+        }
+    }
+
+    // API FE/BE mapping
+    if !args.api_backend_output.is_empty() || !args.api_frontend_output.is_empty() || !args.api_map_output.is_empty() {
+        let be = api::extract_backend(&blobs_api);
+        let fe = api::extract_frontend(&blobs_api);
+
+        if !args.api_backend_output.is_empty() {
+            let path = folder.join(args.api_backend_output.strip_prefix("/").unwrap_or(&args.api_backend_output));
+            fs::write(&path, serde_json::to_string_pretty(&be)?)?;
+            if !matches!(args.verbose, Verbosity::Quiet) {
+                println!("💾 backend routes -> {}", path.display());
+            }
+        }
+        if !args.api_frontend_output.is_empty() {
+            let path = folder.join(args.api_frontend_output.strip_prefix("/").unwrap_or(&args.api_frontend_output));
+            fs::write(&path, serde_json::to_string_pretty(&fe)?)?;
+            if !matches!(args.verbose, Verbosity::Quiet) {
+                println!("💾 frontend calls -> {}", path.display());
+            }
+        }
+        if !args.api_map_output.is_empty() {
+            let map = api::map_api(fe, be);
+            let path = folder.join(args.api_map_output.strip_prefix("/").unwrap_or(&args.api_map_output));
+            fs::write(&path, serde_json::to_string_pretty(&map)?)?;
+            if !matches!(args.verbose, Verbosity::Quiet) {
+                println!("💾 api map -> {}", path.display());
+            }
+        }
+    }
+
+    if !matches!(args.verbose, Verbosity::Quiet) {
+        println!("\n🎉 Done");
+        println!("📊 files: {}, chunks: {}", total_files, total_chunks);
+        if skipped_files > 0 {
+            println!("⏭️  skipped (size): {}", skipped_files);
+        }
+        if failed_files > 0 {
+            println!("💥 failed: {}", failed_files);
+        }
+    }
+
+    Ok(())
+}
+
+fn analyze_file(
+    path: &Path,
+    max_size: usize,
+    language_hint: &Language,
+    max_lines: usize,
+    args: &Args,
+    need_similarity_text: bool,
+    need_files: bool,
+) -> Result<(FileAnalysis, Option<Vec<RawChunk>>, Option<String>)> {
+    let content = fs::read(path)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+    // Line-count guard
+    if max_lines > 0 {
+        let line_count = content.iter().filter(|&&b| b == b'\n').count() + 1;
+        if line_count > max_lines {
+            return Err(anyhow::anyhow!(
+                "File {} has {} lines, exceeding limit of {} - use --force or --max-lines 0",
+                path.display(),
+                line_count,
+                max_lines
+            ));
+        }
+    }
+
+    let language = match language_hint {
+        Language::Rust => tree_sitter_rust::language(),
+        Language::JavaScript => tree_sitter_javascript::language(),
+        Language::TypeScript => tree_sitter_javascript::language(),
+        Language::Auto => {
+            match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+                "rs" => tree_sitter_rust::language(),
+                "js" | "jsx" => tree_sitter_javascript::language(),
+                "ts" | "tsx" => tree_sitter_javascript::language(),
+                _ => tree_sitter_rust::language(),
+            }
+        }
+    };
+
+    let splitter = Splitter::new(language, CharCounter)
+        .map_err(|e| anyhow::anyhow!("Failed to create splitter: {}", e))?
+        .with_max_size(max_size);
+
+    if !matches!(args.verbose, Verbosity::Quiet) && content.len() > 1_000_000 {
+        println!("   🐳 Large file ({} bytes)", content.len());
+    }
+
+    let chunks = splitter
+        .split(&content)
+        .map_err(|e| anyhow::anyhow!("Failed to split file into chunks: {}", e))?;
+
+    let mut raw_for_similarity: Vec<RawChunk> = Vec::new();
+    let mut chunk_info: Vec<ChunkInfo> = Vec::with_capacity(chunks.len());
+
+    for chunk in chunks {
+        let start_line = chunk.range.start_point.row;
+        let end_line = chunk.range.end_point.row;
+        let start_byte = chunk.range.start_byte;
+        let end_byte = chunk.range.end_byte;
+        let size = chunk.size;
+        let subtree = chunk.subtree;
+
+        if need_similarity_text {
+            let text = String::from_utf8_lossy(&content[start_byte..end_byte]).to_string();
+            raw_for_similarity.push(RawChunk {
+                id: 0,
+                file_path: path.to_string_lossy().to_string(),
+                subtree_description: subtree.clone(),
+                start_line,
+                end_line,
+                size,
+                text,
+            });
+        }
+
+        chunk_info.push(ChunkInfo {
+            subtree_description: subtree,
+            start_line,
+            end_line,
+            start_byte,
+            end_byte,
+            size,
+        });
+    }
+
+    let file_analysis = FileAnalysis {
+        file_path: path.to_string_lossy().to_string(),
+        chunks: chunk_info,
+    };
+
+    let maybe_text = if need_files {
+        Some(String::from_utf8_lossy(&content).to_string())
+    } else {
+        None
+    };
+
+    Ok((file_analysis, if need_similarity_text { Some(raw_for_similarity) } else { None }, maybe_text))
+}
+
+#[derive(Serialize)]
+struct AnalysisSummary {
+    last_length: usize,
+    total_files: usize,
+    total_chunks: usize,
+    max_chunk_size: usize,
+    files: Vec<FileAnalysis>,
+}
+
+#[derive(Serialize)]
+struct FileAnalysis {
+    file_path: String,
+    chunks: Vec<ChunkInfo>,
+}
+
+#[derive(Serialize)]
+struct ChunkInfo {
+    subtree_description: String,
+    start_line: usize,
+    end_line: usize,
+    start_byte: usize,
+    end_byte: usize,
+    size: usize,
+}
+
+// Pretty-print helpers for snippets
+fn print_pairs(report: &SimilarityReport, include_snippets: bool, limit: usize) {
+    let limit = if limit == 0 { report.pairs.len() } else { limit.min(report.pairs.len()) };
+    if limit > 0 {
+        println!("\n🖨️  Top {} pairs (method: {}, threshold: {:.2})", limit, report.method, report.threshold);
+    }
+    for (idx, p) in report.pairs.iter().take(limit).enumerate() {
+        println!(
+            "\n#{} [{} {:.3}] overlap={}/{} same_file={} common_path_prefix={}",
+            idx + 1,
+            p.method,
+            p.score,
+            p.overlap_tokens,
+            p.union_tokens,
+            p.same_file,
+            p.common_path_prefix
+        );
+        println!(
+            "A: {} (lines {}-{}, size {})",
+            p.a.file_path, p.a.start_line, p.a.end_line, p.a.size
+        );
+        if include_snippets {
+            if let Some(s) = &p.a.snippet {
+                println!("{}", indent_block(&truncate_for_print(s)));
+            }
+        }
+        println!(
+            "B: {} (lines {}-{}, size {})",
+            p.b.file_path, p.b.start_line, p.b.end_line, p.b.size
+        );
+        if include_snippets {
+            if let Some(s) = &p.b.snippet {
+                println!("{}", indent_block(&truncate_for_print(s)));
+            }
+        }
+    }
+}
+
+fn indent_block(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2 * s.lines().count());
+    for line in s.lines() {
+        out.push_str("    ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn truncate_for_print(s: &str) -> String {
+    const MAX_CHARS: usize = 800;
+    if s.len() <= MAX_CHARS {
+        s.to_string()
+    } else {
+        let mut t = s[..MAX_CHARS].to_string();
+        t.push_str("\n    ... [truncated]");
+        t
+    }
+}

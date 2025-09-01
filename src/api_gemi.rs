@@ -1,4 +1,4 @@
-use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 
@@ -24,7 +24,7 @@ pub struct FrontendApiCall {
 
 pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<BackendEndpoint>> {
     let mut parser = Parser::new();
-    parser.set_language(tree_sitter_rust::language())?;
+    parser.set_language(&tree_sitter_rust::LANGUAGE.into())?;
     let tree = parser.parse(file_content, None).ok_or_else(|| anyhow!("Failed to parse Rust code"))?;
     let root_node = tree.root_node();
 
@@ -41,11 +41,12 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
         )
     "#;
 
-    let query = Query::new(tree_sitter_rust::language(), query_string)?;
+    let query = Query::new(&tree_sitter_rust::LANGUAGE.into(), query_string)?;
     let mut cursor = QueryCursor::new();
     let mut endpoints = Vec::new();
 
-    for match_ in cursor.matches(&query, root_node, file_content.as_bytes()) {
+    let mut query_matches = cursor.matches(&query, root_node, file_content.as_bytes());
+    while let Some(match_) = query_matches.next() {
         let mut method = "".to_string();
         let mut path = "".to_string();
         let mut handler = "".to_string();
@@ -53,7 +54,8 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
         for capture in match_.captures {
             let node = capture.node;
             let text = node.utf8_text(file_content.as_bytes())?;
-            match query.capture_names()[capture.index as usize].as_str() {
+            let capture_name = &query.capture_names()[capture.index as usize];
+            match capture_name.as_ref() {
                 "method" => method = text.to_string(),
                 "path" => path = text.trim_matches('"').to_string(),
                 "handler" => handler = text.to_string(),
@@ -82,7 +84,7 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
 
 pub fn extract_frontend_api_calls(file_content: &str, file_path: &str) -> Result<Vec<FrontendApiCall>> {
     let mut parser = Parser::new();
-    parser.set_language(tree_sitter_javascript::language())?;
+    parser.set_language(&tree_sitter_javascript::LANGUAGE.into())?;
     let tree = parser.parse(file_content, None).ok_or_else(|| anyhow!("Failed to parse JavaScript/TypeScript code"))?;
     let root_node = tree.root_node();
 
@@ -104,11 +106,12 @@ pub fn extract_frontend_api_calls(file_content: &str, file_path: &str) -> Result
         )
     "#;
 
-    let query = Query::new(tree_sitter_javascript::language(), query_string)?;
+    let query = Query::new(&tree_sitter_javascript::LANGUAGE.into(), query_string)?;
     let mut cursor = QueryCursor::new();
     let mut api_calls = Vec::new();
 
-    for match_ in cursor.matches(&query, root_node, file_content.as_bytes()) {
+    let mut query_matches = cursor.matches(&query, root_node, file_content.as_bytes());
+    while let Some(match_) = query_matches.next() {
         let mut method: Option<String> = None;
         let mut path = "".to_string();
         let mut object: Option<String> = None;
@@ -117,7 +120,8 @@ pub fn extract_frontend_api_calls(file_content: &str, file_path: &str) -> Result
         for capture in match_.captures {
             let node = capture.node;
             let text = node.utf8_text(file_content.as_bytes())?;
-            match query.capture_names()[capture.index as usize].as_str() {
+            let capture_name = &query.capture_names()[capture.index as usize];
+            match capture_name.as_ref() {
                 "method" => method = Some(text.to_string()),
                 "object" => object = Some(text.to_string()),
                 "function" => function = Some(text.to_string()),
@@ -135,8 +139,8 @@ pub fn extract_frontend_api_calls(file_content: &str, file_path: &str) -> Result
         };
 
         if is_api_call && !path.is_empty() {
-            let start_byte = match_.pattern_start_byte;
-            let end_byte = match_.pattern_end_byte;
+            let start_byte = match_.captures.iter().map(|c| c.node.start_byte()).min().unwrap_or(0);
+            let end_byte = match_.captures.iter().map(|c| c.node.end_byte()).max().unwrap_or(0);
             let context_snippet = file_content[start_byte..end_byte].to_string();
 
             api_calls.push(FrontendApiCall {

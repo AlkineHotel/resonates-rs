@@ -131,7 +131,7 @@ where
 
         if chunk_size <= self.max_size {
             return Ok(vec![Chunk {
-                subtree: format!("{}: {{}}", format_node(node, depth), chunk_size),
+                subtree: format!("{}: {}", format_node(node, depth), chunk_size),
                 range: node.range(),
                 size: chunk_size,
             }]);
@@ -150,7 +150,7 @@ where
                         let joined_size = self.joined_size(&tail, head, code)?;
                         if joined_size <= self.max_size {
                             // Concatenate the tail and head names
-                            head.subtree = format!("{}\n{{}}", tail.subtree, head.subtree);
+                            head.subtree = format!("{}\n{}", tail.subtree, head.subtree);
                             head.range.start_byte = tail.range.start_byte;
                             head.range.start_point = tail.range.start_point;
                             head.size = joined_size;
@@ -178,7 +178,7 @@ where
 
 fn format_node(node: &Node, depth: usize) -> String {
     format!(
-        "{indent}{{branch}} {{kind:<32}} [{{start}}..{{end}}]",
+        "{indent}{branch} {kind:<32} [{start}..{end}]",
         indent = "│  ".repeat(depth.saturating_sub(1)),
         branch = if depth > 0 { "├─" } else { "" },
         kind = node.kind(),

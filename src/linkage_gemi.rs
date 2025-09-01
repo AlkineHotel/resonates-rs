@@ -1,6 +1,7 @@
 use crate::api_gemi::{BackendEndpoint, FrontendApiCall};
 use crate::embedder_fast::{FastEmbedder, resolve_model};
 use anyhow::{Result, anyhow};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct ApiLinkage {
@@ -36,7 +37,7 @@ pub async fn find_api_linkages(
         backend_texts.push((i, format!("{} {} {}", endpoint.method, endpoint.path, endpoint.handler)));
     }
     if !backend_texts.is_empty() {
-        let embeddings = embedder.embed(&backend_texts, backend_texts.len() as u32)?;
+        let embeddings = embedder.embed(&backend_texts, backend_texts.len())?;
         for (idx, emb) in embeddings {
             backend_embeddings.insert(idx, emb);
         }
@@ -49,7 +50,7 @@ pub async fn find_api_linkages(
         frontend_texts.push((i, format!("{} {}", call.path, call.context_snippet)));
     }
     if !frontend_texts.is_empty() {
-        let embeddings = embedder.embed(&frontend_texts, frontend_texts.len() as u32)?;
+        let embeddings = embedder.embed(&frontend_texts, frontend_texts.len())?;
         for (idx, emb) in embeddings {
             frontend_embeddings.insert(idx, emb);
         }

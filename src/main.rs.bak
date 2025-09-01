@@ -1,8 +1,7 @@
 use clap::{Parser, ValueEnum, Command};
 use clap_complete::{generate, Generator, Shell};
+use code_splitter::{CharCounter, Splitter};
 use serde::Serialize;
-mod splitter_gemi;
-use splitter_gemi::{CharCounter, Splitter};
 use anyhow::{Result, Context};
 use std::{fs};
 use std::path::Path;
@@ -37,9 +36,6 @@ mod api;
 mod cluster;
 mod config;
 mod filter_pipeline;
-mod api_gemi;
-mod linkage_gemi;
-mod report_gemi;
 
 
 use similarity::{RawChunk, SimilarityMode, SimilarityParams, SimilarityReport};
@@ -53,7 +49,7 @@ use embedder_fast::{FastEmbedder, resolve_model};
 #[command(about = "Semantic Code Pattern Analysis via Embedding Resonance")]
 struct Args {
     /// Path to analyze
-    #[arg(short, long, default_value = ".//")]
+    #[arg(short, long, default_value = "./")]
     path: String,
 
     /// Maximum chunk size (characters)
@@ -222,28 +218,6 @@ struct Args {
     /// Path to config file (overrides default locations)
     #[arg(long)]
     config: Option<String>,
-
-    // -------- API Linkage options --------
-
-    /// Enable API linkage analysis
-    #[arg(long)]
-    api_linkage: bool,
-
-    /// Output file for API linkage report
-    #[arg(long, default_value = "api_linkage_report.txt")]
-    api_linkage_output: String,
-
-    /// Similarity threshold for API linkage (cosine similarity)
-    #[arg(long, default_value_t = 0.75)]
-    api_linkage_threshold: f32,
-
-    /// Comma-separated list of backend files to analyze for API routes
-    #[arg(long, default_value = "src/server_setup.rs")]
-    api_linkage_backend_files: String,
-
-    /// Comma-separated list of frontend files to analyze for API calls
-    #[arg(long, default_value = "src/App.jsx")]
-    api_linkage_frontend_files: String,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -314,7 +288,7 @@ fn actual_main() -> Result<()> {
         let mut cmd = build_cli();
       //  eprintln!("# Generating completion file for {generator}...");
         print_completions(generator, &mut cmd);
-        return Ok(())
+        return Ok(());
     }
 
     // Handle config generation
@@ -322,11 +296,11 @@ fn actual_main() -> Result<()> {
         match config::Config::save_default() {
             Ok(path) => {
                 println!("Generated default config file at: {}", path.display());
-                return Ok(())
+                return Ok(());
             }
             Err(e) => {
                 eprintln!("Failed to generate config file: {}", e);
-                return Err(e)
+                return Err(e);
             }
         }
     }
@@ -345,7 +319,7 @@ fn actual_main() -> Result<()> {
     if !matches!(args.verbose, Verbosity::Quiet) {
         println!("🔍 Path: {}", args.path);
         println!("🌐 Language: {:?}", args.language);
-        println!("🧪 Similarity: {{:?}} (threshold {{:.2}})", args.similarity, args.sim_threshold);
+        println!("🧪 Similarity: {:?} (threshold {:.2})", args.similarity, args.sim_threshold);
         if args.similarity == SimMode::Embedding && !args.embedder_cmd.trim().is_empty() {
             println!("🧠 Embedder: {}", args.embedder_cmd);
             println!("🏗️  ANN: k={}, ef={}, m={}", args.ann_k, args.ann_ef, args.ann_m);
@@ -713,61 +687,6 @@ fn actual_main() -> Result<()> {
         }
     }
 
-    // API Linkage Analysis
-    if args.api_linkage {
-        if !matches!(args.verbose, Verbosity::Quiet) {
-            println!("🔗 Starting API linkage analysis...");
-        }
-
-        let backend_files: Vec<&str> = args.api_linkage_backend_files.split(',').collect();
-        let frontend_files: Vec<&str> = args.api_linkage_frontend_files.split(',').collect();
-
-        let mut all_backend_endpoints = Vec::new();
-        for file_str in backend_files {
-            let file_path = Path::new(file_str);
-            if file_path.exists() {
-                let content = fs::read_to_string(file_path)
-                    .with_context(|| format!("Failed to read backend file: {}", file_path.display()))?;
-                let endpoints = api_gemi::extract_axum_routes(&content, file_str)?;
-                all_backend_endpoints.extend(endpoints);
-            } else {
-                eprintln!("⚠️ Backend file not found: {}", file_str);
-            }
-        }
-
-        let mut all_frontend_calls = Vec::new();
-        for file_str in frontend_files {
-            let file_path = Path::new(file_str);
-            if file_path.exists() {
-                let content = fs::read_to_string(file_path)
-                    .with_context(|| format!("Failed to read frontend file: {}", file_path.display()))?;
-                let calls = api_gemi::extract_frontend_api_calls(&content, file_str)?;
-                all_frontend_calls.extend(calls);
-            } else {
-                eprintln!("⚠️ Frontend file not found: {}", file_str);
-            }
-        }
-
-        if !matches!(args.verbose, Verbosity::Quiet) {
-            println!("  Found {} backend endpoints and {} frontend calls.", all_backend_endpoints.len(), all_frontend_calls.len());
-        }
-
-        let linkages = linkage_gemi::find_api_linkages(
-            all_frontend_calls,
-            all_backend_endpoints,
-            &args.embedder_cmd,
-            args.api_linkage_threshold,
-        ).await?;
-
-        let report_content = report_gemi::generate_linkage_report(&linkages);
-        let output_path = folder.join(&args.api_linkage_output);
-        fs::write(&output_path, report_content)?;
-
-        if !matches!(args.verbose, Verbosity::Quiet) {
-            println!("💾 API linkage report -> {}", output_path.display());
-        }
-    }
-
     Ok(())
 }
 
@@ -837,8 +756,8 @@ let language = unsafe { match language_hint {
 }
 };
 
-    let splitter = Splitter::new(unsafe { language() }, CharCounter)
-        .map_err(|e| anyhow::anyhow!("Failed to create splitter: {}", e))? 
+    let splitter = Splitter::new(unsafe { language }, CharCounter)
+        .map_err(|e| anyhow::anyhow!("Failed to create splitter: {}", e))?
         .with_max_size(max_size);
 
     if !matches!(args.verbose, Verbosity::Quiet) && content.len() > 1_000_000 {
@@ -926,11 +845,11 @@ struct ChunkInfo {
 fn print_pairs(report: &SimilarityReport, include_snippets: bool, limit: usize) {
     let limit = if limit == 0 { report.pairs.len() } else { limit.min(report.pairs.len()) };
     if limit > 0 {
-        println!("\n🖨️  Top {} pairs (method: {}, threshold: {{:.2}})", limit, report.method, report.threshold);
+        println!("\n🖨️  Top {} pairs (method: {}, threshold: {:.2})", limit, report.method, report.threshold);
     }
     for (idx, p) in report.pairs.iter().take(limit).enumerate() {
         println!(
-            "\n#{{}} [{{}} {{:.3}}] overlap={{}}/{{}} same_file={{}} common_path_prefix={{}}",
+            "\n#{} [{} {:.3}] overlap={}/{} same_file={} common_path_prefix={}",
             idx + 1,
             p.method,
             p.score,
@@ -1022,7 +941,7 @@ fn process_chunk_batch(
                     chunk_a.start_line, chunk_a.end_line,
                     chunk_b.subtree_description,
                     chunk_b.file_path.split('/').last().unwrap_or(&chunk_b.file_path),
-                    chunk_b.start_line, chunk_b.end_line,
+                    chunk_b.start_line, chunk_b.end_line
                 );
             }
             
@@ -1058,7 +977,7 @@ fn process_chunk_batch(
             
             if final_score >= args.sim_threshold {
                 if matches!(args.verbose, Verbosity::Verbose) {
-                    println!("    ✅ Match found! Token: {{:.3}}, Embedding: {{:.3}}, Final: {{:.3}}", 
+                    println!("    ✅ Match found! Token: {:.3}, Embedding: {:.3}, Final: {:.3}", 
                              token_score, embedding_score, final_score);
                 }
                 
@@ -1095,7 +1014,7 @@ fn process_chunk_batch(
                     common_path_prefix: 0, // TODO: calculate actual prefix
                 });
             } else if matches!(args.verbose, Verbosity::Verbose) {
-                println!("    ❌ Below threshold. Token: {{:.3}}, Embedding: {{:.3}}, Final: {{:.3}}", 
+                println!("    ❌ Below threshold. Token: {:.3}, Embedding: {:.3}, Final: {:.3}", 
                          token_score, embedding_score, final_score);
             }
         }

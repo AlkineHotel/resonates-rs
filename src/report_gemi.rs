@@ -14,7 +14,7 @@ pub fn generate_linkage_report(linkages: &[ApiLinkage]) -> String {
     report.push_str(&format!("Found {} potential API linkages.\n\n", linkages.len()));
 
     for (i, linkage) in linkages.iter().enumerate() {
-        report.push_str(&format!("---\n", i + 1));
+        report.push_str(&format!("--- Linkage {}\n", i + 1));
         report.push_str(&format!("  Type: {:?}\n", linkage.linkage_type));
         report.push_str(&format!("  Score: {:.4}\n", linkage.similarity_score));
         report.push_str("  Frontend Call:\n");
@@ -24,7 +24,7 @@ pub fn generate_linkage_report(linkages: &[ApiLinkage]) -> String {
         if let Some(method) = &linkage.frontend_call.method {
             report.push_str(&format!("    Method: {}\n", method));
         }
-        report.push_str(&format!("    Context: "\n{}\n"\n", linkage.frontend_call.context_snippet));
+        report.push_str(&format!("    Context:\n{}\n", linkage.frontend_call.context_snippet));
         report.push_str("  Backend Endpoint:\n");
         report.push_str(&format!("    File: {}\n", linkage.backend_endpoint.file_path));
         report.push_str(&format!("    Lines: {}- {}\n", linkage.backend_endpoint.start_line, linkage.backend_endpoint.end_line));

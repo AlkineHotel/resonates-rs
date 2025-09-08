@@ -31,6 +31,7 @@
 use clap::{Parser, ValueEnum, Command};
 use clap_complete::{generate, Generator, Shell};
 use serde::Serialize;
+use glob;
 mod splitter_gemi;
 use splitter_gemi::{CharCounter, Splitter};
 use anyhow::{Result, Context};
@@ -70,6 +71,7 @@ mod filter_pipeline;
 mod api_gemi;
 mod linkage_gemi;
 mod report_gemi;
+mod amp_similarity;
 
 
 use similarity::{RawChunk, SimilarityMode, SimilarityParams, SimilarityReport};
@@ -82,12 +84,12 @@ use embedder_fast::{FastEmbedder, resolve_model};
 #[command(version = "1.3")]
 #[command(about = "Semantic Code Pattern Analysis via Embedding Resonance")]
 struct Args {
-    // Path to analyze
-    #[arg(short, long, default_value = ".//")]
-    path: String,
+    /// Paths to analyze (space-separated, or use '-' for stdin)
+    #[arg(short, long, default_value = "./")]
+    path: Vec<String>,
 
     // Maximum chunk size (characters)
-    #[arg(long, default_value_t = 2048)]
+    #[arg(long, default_value_t = 9000)]
     max_size: usize,
 
     // Output FOLDER for chunk analysis results
@@ -369,7 +371,7 @@ fn main() -> Result<()> {
     // Increase stack size for massive files
     let builder = std::thread::Builder::new()
         .name("main".into())
-        .stack_size(32 * 1024 * 1024); // 32MB
+        .stack_size(64 * 1024 * 1024); // 64MB
 
     let handler = builder.spawn(|| actual_main()).expect("Failed to spawn main thread");
     handler.join().expect("Main thread panicked")
@@ -443,8 +445,35 @@ fn actual_main() -> Result<()> {
     }
 
 
+    // Handle paths (support multiple paths and stdin)
+    let paths = if args.path.is_empty() || (args.path.len() == 1 && args.path[0] == "-") {
+        // Read from stdin
+        use std::io::{self, BufRead};
+        let stdin = io::stdin();
+        let paths: Result<Vec<String>, _> = stdin.lock().lines().collect();
+        match paths {
+            Ok(p) => p,
+            Err(e) => return Err(anyhow::anyhow!("Failed to read paths from stdin: {}", e)),
+        }
+    } else {
+        args.path.clone()
+    };
+
+    // Default to current directory if no paths provided
+    let paths = if paths.is_empty() { vec!["./".to_string()] } else { paths };
+
     if !matches!(args.verbose, Verbosity::Quiet) {
-        println!("🔍 Path: {}", args.path);
+        if paths.len() == 1 {
+            println!("🔍 Path: {}", paths[0]);
+        } else {
+            println!("🔍 Paths: {} locations", paths.len());
+            for (i, path) in paths.iter().enumerate().take(3) {
+                println!("  {}. {}", i + 1, path);
+            }
+            if paths.len() > 3 {
+                println!("  ... and {} more", paths.len() - 3);
+            }
+        }
         println!("🌐 Language: {:?}", args.language);
         println!("🧪 Similarity: {:?} (threshold {:.2})", args.similarity, args.sim_threshold);
         if args.similarity == SimMode::Embedding && !args.embedder_cmd.trim().is_empty() {
@@ -460,14 +489,24 @@ fn actual_main() -> Result<()> {
     let mut skipped_files = 0;
     let mut failed_files = 0;
 
-    let walker = if args.recursive {
-        WalkDir::new(&args.path).follow_links(false)
+    // Get exclude patterns from config and CLI (CLI overrides config if provided)
+    let exclude_patterns: Vec<String> = if args.exclude != "node_modules,target,dist,build,.git,*.lock,package-lock.json" {
+        // CLI exclude was provided (not default), use it
+        args.exclude.split(',').map(|s| s.trim().to_string()).collect()
     } else {
-        WalkDir::new(&args.path).max_depth(1).follow_links(false)
+        // Use config file exclude patterns
+        config.files.exclude.clone()
     };
-
-    let exclude_patterns: Vec<&str> = args.exclude.split(',').map(|s| s.trim()).collect();
     let mut processed_files = 0;
+
+    // Create walkers for all paths
+    let walkers: Vec<_> = paths.iter().map(|path| {
+        if args.recursive {
+            WalkDir::new(path).follow_links(false)
+        } else {
+            WalkDir::new(path).max_depth(1).follow_links(false)
+        }
+    }).collect();
 
     // Collect raw chunks for similarity (RESTORED ORIGINAL FUNCTIONALITY)
     let need_similarity_text = !matches!(args.similarity, SimMode::None);
@@ -509,20 +548,37 @@ fn actual_main() -> Result<()> {
     let mut blobs_graph: Vec<graph::FileBlob> = Vec::new();
     let mut blobs_api: Vec<api::FileBlob> = Vec::new();
 
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+    // Process all paths
+    for walker in walkers {
+        for entry in walker.into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
 
-        let path_str = path.to_string_lossy();
-        // Exclude patterns
+        let path_str = path.to_string_lossy().to_string();
+        // Exclude patterns - proper glob pattern matching
         let should_exclude = exclude_patterns.iter().any(|pattern| {
-            if pattern.contains('*') {
-                let pattern = pattern.replace('*', "");
-                path_str.contains(&pattern)
+            // Handle different pattern types
+            if pattern.contains('*') || pattern.contains('?') {
+                // Use glob pattern matching for wildcards
+                if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                    // Check both the full path and just the filename/dirname
+                    glob_pattern.matches(&path_str) || 
+                    glob_pattern.matches(path.file_name().unwrap_or_default().to_string_lossy().as_ref()) ||
+                    path.components().any(|component| {
+                        glob_pattern.matches(&component.as_os_str().to_string_lossy())
+                    })
+                } else {
+                    // Fallback to simple contains if glob pattern is invalid
+                    path_str.contains(pattern)
+                }
             } else {
-                path_str.contains(*pattern)
+                // For non-wildcard patterns, check if any path component matches
+                path_str.contains(pattern) || 
+                path.components().any(|component| {
+                    component.as_os_str().to_string_lossy() == pattern.as_str()
+                })
             }
         });
         if should_exclude {
@@ -644,6 +700,7 @@ fn actual_main() -> Result<()> {
                     println!("   ❌ Error: {}", e);
                 }
             }
+        }
         }
     }
 

@@ -1,0 +1,87 @@
+
+using namespace System.Management.Automation
+using namespace System.Management.Automation.Language
+
+Register-ArgumentCompleter -Native -CommandName 'resonates' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $commandElements = $commandAst.CommandElements
+    $command = @(
+        'resonates'
+        for ($i = 1; $i -lt $commandElements.Count; $i++) {
+            $element = $commandElements[$i]
+            if ($element -isnot [StringConstantExpressionAst] -or
+                $element.StringConstantType -ne [StringConstantType]::BareWord -or
+                $element.Value.StartsWith('-') -or
+                $element.Value -eq $wordToComplete) {
+                break
+        }
+        $element.Value
+    }) -join ';'
+
+    $completions = @(switch ($command) {
+        'resonates' {
+            [CompletionResult]::new('-p', '-p', [CompletionResultType]::ParameterName, 'Paths to analyze (space-separated, or use ''-'' for stdin)')
+            [CompletionResult]::new('--path', '--path', [CompletionResultType]::ParameterName, 'Paths to analyze (space-separated, or use ''-'' for stdin)')
+            [CompletionResult]::new('--max-size', '--max-size', [CompletionResultType]::ParameterName, 'max-size')
+            [CompletionResult]::new('-f', '-f', [CompletionResultType]::ParameterName, 'f')
+            [CompletionResult]::new('--folder', '--folder', [CompletionResultType]::ParameterName, 'folder')
+            [CompletionResult]::new('-o', '-o', [CompletionResultType]::ParameterName, 'o')
+            [CompletionResult]::new('--output', '--output', [CompletionResultType]::ParameterName, 'output')
+            [CompletionResult]::new('-l', '-l', [CompletionResultType]::ParameterName, 'l')
+            [CompletionResult]::new('--language', '--language', [CompletionResultType]::ParameterName, 'language')
+            [CompletionResult]::new('--mode', '--mode', [CompletionResultType]::ParameterName, 'mode')
+            [CompletionResult]::new('--file-types', '--file-types', [CompletionResultType]::ParameterName, 'file-types')
+            [CompletionResult]::new('-v', '-v', [CompletionResultType]::ParameterName, 'v')
+            [CompletionResult]::new('--verbose', '--verbose', [CompletionResultType]::ParameterName, 'verbose')
+            [CompletionResult]::new('--max-file-size', '--max-file-size', [CompletionResultType]::ParameterName, 'max-file-size')
+            [CompletionResult]::new('--max-lines', '--max-lines', [CompletionResultType]::ParameterName, 'max-lines')
+            [CompletionResult]::new('--exclude', '--exclude', [CompletionResultType]::ParameterName, 'exclude')
+            [CompletionResult]::new('--max-files', '--max-files', [CompletionResultType]::ParameterName, 'max-files')
+            [CompletionResult]::new('--similarity', '--similarity', [CompletionResultType]::ParameterName, 'similarity')
+            [CompletionResult]::new('--sim-threshold', '--sim-threshold', [CompletionResultType]::ParameterName, 'sim-threshold')
+            [CompletionResult]::new('--sim-top-k', '--sim-top-k', [CompletionResultType]::ParameterName, 'sim-top-k')
+            [CompletionResult]::new('--sim-band-bits', '--sim-band-bits', [CompletionResultType]::ParameterName, 'sim-band-bits')
+            [CompletionResult]::new('--sim-min-tokens', '--sim-min-tokens', [CompletionResultType]::ParameterName, 'sim-min-tokens')
+            [CompletionResult]::new('--sim-output', '--sim-output', [CompletionResultType]::ParameterName, 'sim-output')
+            [CompletionResult]::new('--embedder-cmd', '--embedder-cmd', [CompletionResultType]::ParameterName, 'embedder-cmd')
+            [CompletionResult]::new('--chunk-batch-size', '--chunk-batch-size', [CompletionResultType]::ParameterName, 'chunk-batch-size')
+            [CompletionResult]::new('--csv-output', '--csv-output', [CompletionResultType]::ParameterName, 'csv-output')
+            [CompletionResult]::new('--ann-k', '--ann-k', [CompletionResultType]::ParameterName, 'ann-k')
+            [CompletionResult]::new('--ann-ef', '--ann-ef', [CompletionResultType]::ParameterName, 'ann-ef')
+            [CompletionResult]::new('--ann-ef-search', '--ann-ef-search', [CompletionResultType]::ParameterName, 'ann-ef-search')
+            [CompletionResult]::new('--ann-m', '--ann-m', [CompletionResultType]::ParameterName, 'ann-m')
+            [CompletionResult]::new('--verify-min-jaccard', '--verify-min-jaccard', [CompletionResultType]::ParameterName, 'verify-min-jaccard')
+            [CompletionResult]::new('--sim-print-limit', '--sim-print-limit', [CompletionResultType]::ParameterName, 'sim-print-limit')
+            [CompletionResult]::new('--graph-output', '--graph-output', [CompletionResultType]::ParameterName, 'graph-output')
+            [CompletionResult]::new('--api-backend-output', '--api-backend-output', [CompletionResultType]::ParameterName, 'api-backend-output')
+            [CompletionResult]::new('--api-frontend-output', '--api-frontend-output', [CompletionResultType]::ParameterName, 'api-frontend-output')
+            [CompletionResult]::new('--api-map-output', '--api-map-output', [CompletionResultType]::ParameterName, 'api-map-output')
+            [CompletionResult]::new('--suspects-output', '--suspects-output', [CompletionResultType]::ParameterName, 'suspects-output')
+            [CompletionResult]::new('--generate-completion', '--generate-completion', [CompletionResultType]::ParameterName, 'generate-completion')
+            [CompletionResult]::new('--config', '--config', [CompletionResultType]::ParameterName, 'config')
+            [CompletionResult]::new('--api-linkage-output', '--api-linkage-output', [CompletionResultType]::ParameterName, 'api-linkage-output')
+            [CompletionResult]::new('--api-linkage-threshold', '--api-linkage-threshold', [CompletionResultType]::ParameterName, 'api-linkage-threshold')
+            [CompletionResult]::new('--api-linkage-backend-files', '--api-linkage-backend-files', [CompletionResultType]::ParameterName, 'api-linkage-backend-files')
+            [CompletionResult]::new('--api-linkage-frontend-files', '--api-linkage-frontend-files', [CompletionResultType]::ParameterName, 'api-linkage-frontend-files')
+            [CompletionResult]::new('-r', '-r', [CompletionResultType]::ParameterName, 'r')
+            [CompletionResult]::new('--recursive', '--recursive', [CompletionResultType]::ParameterName, 'recursive')
+            [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, 'force')
+            [CompletionResult]::new('--sim-cross-file-only', '--sim-cross-file-only', [CompletionResultType]::ParameterName, 'sim-cross-file-only')
+            [CompletionResult]::new('--sim-include-snippets', '--sim-include-snippets', [CompletionResultType]::ParameterName, 'sim-include-snippets')
+            [CompletionResult]::new('--no-pre-filtering', '--no-pre-filtering', [CompletionResultType]::ParameterName, 'no-pre-filtering')
+            [CompletionResult]::new('--streaming', '--streaming', [CompletionResultType]::ParameterName, 'streaming')
+            [CompletionResult]::new('--sim-print', '--sim-print', [CompletionResultType]::ParameterName, 'sim-print')
+            [CompletionResult]::new('--generate-config', '--generate-config', [CompletionResultType]::ParameterName, 'generate-config')
+            [CompletionResult]::new('--api-linkage', '--api-linkage', [CompletionResultType]::ParameterName, 'api-linkage')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('-V', '-V ', [CompletionResultType]::ParameterName, 'Print version')
+            [CompletionResult]::new('--version', '--version', [CompletionResultType]::ParameterName, 'Print version')
+            break
+        }
+    })
+
+    $completions.Where{ $_.CompletionText -like "$wordToComplete*" } |
+        Sort-Object -Property ListItemText
+}

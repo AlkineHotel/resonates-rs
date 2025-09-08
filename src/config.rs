@@ -81,7 +81,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             general: GeneralConfig {
-                max_size: 2048,
+                max_size: 9000,
                 max_file_size: 100_000_000,
                 max_lines: 0,
                 max_files: 20000,

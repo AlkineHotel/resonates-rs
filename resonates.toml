@@ -2,8 +2,8 @@
 # Place in ~/.config/resonates/resonates.toml (Linux/macOS) or %APPDATA%/resonates/resonates.toml (Windows)
 
 [general]
-max_size = 2048
-max_file_size = 100_000_000
+max_size = 24000
+  max_file_size = 50000000
 max_lines = 0
 max_files = 20000
 recursive = false
@@ -11,15 +11,15 @@ force = false
 
 [files]
 file_types = ["rs", "js", "jsx", "ts", "tsx"]
-exclude = ["node_modules", "target", "dist", "build", ".git", "*.lock", "package-lock.json"]
+exclude = ["json", "node_modules", "target", "dist", "build", ".git", "*.lock", "package-lock.json", "**json**",".*json.*"]
 
 [similarity]
-mode = "token"  # "none", "token", "embedding"
+mode = "embedding"
 threshold = 0.86
-top_k = 300
-min_tokens = 6
+top_k = 500
+min_tokens = 8
 cross_file_only = true
-include_snippets = false
+include_snippets = true
 
 # Token-based similarity
 band_bits = 8
@@ -51,9 +51,10 @@ api_backend_file = "/api_backend.json"
 api_frontend_file = "/api_frontend.json"
 api_map_file = "/api_map.json"
 suspects_file = "/suspects.json"
+csv_output = "/embeddings1.csv"
 
 [progress]
-verbosity = "normal"  # "quiet", "normal", "verbose"
+verbosity = "verbose"
 show_progress_bars = true
 print_similarity_pairs = false
 print_limit = 10

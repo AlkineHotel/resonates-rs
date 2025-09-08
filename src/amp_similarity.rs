@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use ahash::{AHashMap, AHashSet};
 use serde::Serialize;
 use rayon::prelude::*;
@@ -6,7 +6,6 @@ use rayon::prelude::*;
 use crate::similarity::{RawChunk, ChunkRef};
 use crate::embedder_fast::FastEmbedder;
 use crate::ann_hnsw::topk_pairs_hnsw_cosine;
-use crate::filter_pipeline::{FilterPipeline, FilterStats};
 
 /// Chou-Talalay inspired similarity analysis
 /// CI = TokenScore/TokenDx + EmbedScore/EmbedDx + (TokenScore*EmbedScore)/(TokenDx*EmbedDx)
@@ -57,7 +56,7 @@ pub struct SynergyDistribution {
     pub median_ci: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ChouTalalaySimilarityParams {
     pub token_dx: f32,              // Token score for 50% detection rate
     pub embed_dx: f32,              // Embedding score for 50% detection rate

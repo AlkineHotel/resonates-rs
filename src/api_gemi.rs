@@ -29,16 +29,23 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
     let root_node = tree.root_node();
 
     let query_string = r#"
-        (call_expression
-            function: (field_expression
-                field: (field_identifier) @method
-                field: (field_identifier) @route_macro
-            )
-            arguments: (arguments
-                (string_literal) @path
-                (identifier) @handler
-            )
+(
+  (call_expression
+    function: (field_expression
+      field: (field_identifier) @_route
+      (#eq? @_route "route")
+    )
+    arguments: (arguments
+      (string_literal) @path
+      (call_expression
+        function: (identifier) @method
+        arguments: (arguments
+          (identifier) @handler
         )
+      )
+    )
+  ) @expression
+)
     "#;
 
     let query = Query::new(&tree_sitter_rust::LANGUAGE.into(), query_string)?;
@@ -50,6 +57,7 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
         let mut method = "".to_string();
         let mut path = "".to_string();
         let mut handler = "".to_string();
+        let mut expression_node: Option<Node> = None;
 
         for capture in match_.captures {
             let node = capture.node;
@@ -59,11 +67,12 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
                 "method" => method = text.to_string(),
                 "path" => path = text.trim_matches('"').to_string(),
                 "handler" => handler = text.to_string(),
+                "expression" => expression_node = Some(node),
                 _ => {},
             }
         }
 
-        if !method.is_empty() && !path.is_empty() && !handler.is_empty() {
+        if let (false, false, false, Some(node)) = (method.is_empty(), path.is_empty(), handler.is_empty(), expression_node) {
             // Filter for common HTTP methods used with .route()
             let http_methods = ["get", "post", "put", "delete", "patch", "head", "options"];
             if http_methods.contains(&method.as_str()) {
@@ -72,8 +81,8 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
                     path,
                     handler,
                     file_path: file_path.to_string(),
-                    start_line: root_node.start_position().row + 1,
-                    end_line: root_node.end_position().row + 1,
+                    start_line: node.start_position().row + 1,
+                    end_line: node.end_position().row + 1,
                 });
             }
         }
@@ -81,7 +90,6 @@ pub fn extract_axum_routes(file_content: &str, file_path: &str) -> Result<Vec<Ba
 
     Ok(endpoints)
 }
-
 pub fn extract_frontend_api_calls(file_content: &str, file_path: &str) -> Result<Vec<FrontendApiCall>> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_javascript::LANGUAGE.into())?;

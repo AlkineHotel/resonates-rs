@@ -117,7 +117,7 @@ pub struct SimilarityPair {
     pub common_path_prefix: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Debug)]
 pub struct ChunkRef {
     pub file_path: String,
     pub subtree_description: String,
@@ -513,7 +513,7 @@ fn get_embeddings(chunks: &[RawChunk], embedder_cmd: &str) -> Result<(Vec<Vec<f3
     // Build text payload (shortened per chunk for speed)
     let items: Vec<(usize, String)> = chunks
         .iter()
-        .map(|c| (c.id, snippet_for_embed(&c.text, 4096)))
+        .map(|c| (c.id, snippet_for_embed(&c.text, 24000)))
         .collect();
 
     // fastembed path 
@@ -645,7 +645,7 @@ fn hnsw_topk_pairs_cosine(
 // -------------------------- Utilities --------------------------
 
 fn snippet(s: &str) -> String {
-    const MAX: usize = 800;
+    const MAX: usize = 12000;
     if s.len() <= MAX { s.to_string() } else { s[..MAX].to_string() }
 }
 
